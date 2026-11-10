@@ -1,0 +1,29 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 语法检查
+        run: node --check pt-suite.user.js
+
+      - name: 署名自检（分片 / 版本 / SIG_DIGEST 一致性）
+        run: node tools/verify-sign.mjs
+
+      - name: 版本号与 CHANGELOG 对齐
+        run: |
+          ver=$(node -e "const s=require('fs').readFileSync('pt-suite.user.js','utf8');console.log(/PTX\.VERSION = '([^']*)'/.exec(s)[1])")
+          echo "script version: $ver"
+          grep -q "## $ver " CHANGELOG.md && echo "CHANGELOG ok" || { echo "CHANGELOG.md 缺少 $ver 条目"; exit 1; }

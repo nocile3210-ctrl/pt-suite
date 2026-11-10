@@ -1,0 +1,16 @@
+# 本地残留 / 临时文件
+*.bak-*
+*.log
+locked.user.js
+node_modules/
+__pycache__/
+*.pyc
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 由 tools/build-feature-map.py 生成的中间产物（正式文件在根目录）
+tools/*.xlsx

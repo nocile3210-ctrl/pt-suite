@@ -1,0 +1,16 @@
+#!/bin/sh
+# 提交前自检：语法 + 署名一致性。缺 node 时静默跳过（不阻塞提交）。
+command -v node >/dev/null 2>&1 || exit 0
+
+fail=0
+if ! node --check pt-suite.user.js; then
+    echo "[pre-commit] ✗ pt-suite.user.js 语法错误"
+    fail=1
+fi
+if ! node tools/verify-sign.mjs >/dev/null 2>&1; then
+    echo "[pre-commit] ✗ 署名自检失败（改过版本号？跑 node tools/bump.mjs <版本>）"
+    node tools/verify-sign.mjs | tail -n 6
+    fail=1
+fi
+[ "$fail" -eq 0 ] && echo "[pre-commit] ✓ 语法与署名检查通过"
+exit $fail

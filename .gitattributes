@@ -1,0 +1,7 @@
+# 用户脚本统一 LF，避免 Windows 换行把 raw 文件搞成 CRLF
+*.user.js text eol=lf
+*.mjs     text eol=lf
+*.py      text eol=lf
+*.md      text eol=lf
+*.yml     text eol=lf
+*.xlsx    binary
