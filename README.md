@@ -3,21 +3,21 @@
 把 14 个零散 PT 站点脚本合成**一个** Tampermonkey 用户脚本：统一内核、统一面板、统一署名自检。
 
 - 主文件：[`pt-suite.user.js`](pt-suite.user.js)（单文件，零外部依赖）
-- 版本：3.1.0
+- 版本：3.1.1
 - 署名：**嘴贱招来九尾妖狐**（内置检测，见第 4 节）
 
 ## 安装
 
 1. 装 Tampermonkey（Edge/Chrome/Firefox 均可）。
-2. 打开本仓库的 raw 链接，管理器会直接弹出安装页：
+2. 点这个链接，管理器会直接弹出安装页：
 
-```
-https://raw.githubusercontent.com/nocile3210-ctrl/pt-suite/main/pt-suite.user.js
-```
+**https://raw.githubusercontent.com/nocile3210-ctrl/pt-suite/main/pt-suite.user.js**
 
 3. 也可以下载 `pt-suite.user.js` → 管理器「添加新脚本」→ 全选粘贴 → 保存。
 
 装完打开任一 PT 站点，右下角会出现 `PT` 悬浮球。
+
+脚本头已带 `@downloadURL` / `@updateURL`，以后仓库更新 `@version`，管理器会按自己的周期（默认约 24h）提示升级，不用手动搬运。
 
 ---
 

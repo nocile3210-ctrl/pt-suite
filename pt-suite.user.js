@@ -1,7 +1,7 @@
-﻿// ==UserScript==
+// ==UserScript==
 // @name         PT多功能整合增强版 · 嘴贱招来九尾妖狐
-// @namespace    https://github.com/yg/pt-suite/嘴贱招来九尾妖狐
-// @version      3.1.0
+// @namespace    https://github.com/nocile3210-ctrl/pt-suite/嘴贱招来九尾妖狐
+// @version      3.1.1
 // @description  合并强化版：魔力A值/A@GB计算+曲线、批量认领/保种统计、官种官组统计、批量送魔力、自动感谢、邮件清理、彩虹ID、隐藏认领已满、种子列表过滤+查重、做种隐藏/拷贝链接、娱乐(摇奖/刮刮乐)。内置署名自检：嘴贱招来九尾妖狐
 // @author       YG · 嘴贱招来九尾妖狐
 // @license      MIT
@@ -30,6 +30,8 @@
 // @connect      *
 // @run-at       document-idle
 // @noframes
+// @downloadURL  https://raw.githubusercontent.com/nocile3210-ctrl/pt-suite/main/pt-suite.user.js
+// @updateURL    https://raw.githubusercontent.com/nocile3210-ctrl/pt-suite/main/pt-suite.user.js
 // @ptx-sign     嘴贱招来九尾妖狐
 // ==/UserScript==
 
@@ -57,12 +59,12 @@
      * 0. 常量 / 署名
      * ==================================================================== */
     const PTX = {};
-    PTX.VERSION = '3.1.0';
+    PTX.VERSION = '3.1.1';
 
     // 署名分片（勿手改，改了会触发自检锁定）
     const SIG_PARTS = [22068, 36145, 25307, 26469, 20061, 23614, 22934, 29392];
     const SIG_ANCHOR = 'PTX-9T-ANCHOR';
-    const SIG_DIGEST = '951927d5';
+    const SIG_DIGEST = '94192642';
     const SIGN = String.fromCharCode.apply(null, SIG_PARTS);
 
     const HOST = location.hostname.replace(/^www\./, '');
