@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PT多功能整合增强版 · 嘴贱招来九尾妖狐
 // @namespace    https://github.com/nocile3210-ctrl/pt-suite/嘴贱招来九尾妖狐
-// @version      3.1.1
+// @version      3.2.0
 // @description  合并强化版：魔力A值/A@GB计算+曲线、批量认领/保种统计、官种官组统计、批量送魔力、自动感谢、邮件清理、彩虹ID、隐藏认领已满、种子列表过滤+查重、做种隐藏/拷贝链接、娱乐(摇奖/刮刮乐)。内置署名自检：嘴贱招来九尾妖狐
 // @author       YG · 嘴贱招来九尾妖狐
 // @license      MIT
@@ -22,6 +22,8 @@
 // @match        *://*/browse*
 // @match        *://totheglory.im/*
 // @match        *://kp.m-team.cc/*
+// @match        https://www.colapt.com/*
+// @match        https://colapt.com/*
 // @grant        GM_addStyle
 // @grant        GM_setClipboard
 // @grant        GM_getValue
@@ -59,12 +61,12 @@
      * 0. 常量 / 署名
      * ==================================================================== */
     const PTX = {};
-    PTX.VERSION = '3.1.1';
+    PTX.VERSION = '3.2.0';
 
     // 署名分片（勿手改，改了会触发自检锁定）
     const SIG_PARTS = [22068, 36145, 25307, 26469, 20061, 23614, 22934, 29392];
     const SIG_ANCHOR = 'PTX-9T-ANCHOR';
-    const SIG_DIGEST = '94192642';
+    const SIG_DIGEST = '034d3b38';
     const SIGN = String.fromCharCode.apply(null, SIG_PARTS);
 
     const HOST = location.hostname.replace(/^www\./, '');
@@ -2321,6 +2323,324 @@
         });
     }
 
+    /* ----------------------------------------------------------------------
+     * 5.11 可乐PT（colapt.com / ReelCore 引擎）
+     *   数据来自同源 OpenAPI：/api/v1（cookie 鉴权，fetch 自带登录态）
+     *   Torrent 结构含 official:boolean 与 tags:官方/4K/HDR/国语/中字…
+     * -------------------------------------------------------------------- */
+    const IS_REELCORE = /(^|\.)colapt\.com$/i.test(HOST);
+
+    const ReelCore = (function () {
+        const API = '/api/v1';
+        const LABEL = {
+            username: '用户名', user_id: 'UID', uid: 'UID', class: '等级', email: '邮箱',
+            raw_uploaded: '上传（原始）', raw_downloaded: '下载（原始）',
+            billed_uploaded: '上传（计费）', billed_downloaded: '下载（计费）',
+            ratio: '分享率', seeding: '做种数', leeching: '下载中', completions: '完成数',
+            seeding_bytes: '做种体积', bonus_bytes: '保种加成',
+            balance: '积分余额', points: '积分', points_balance: '积分余额',
+            points_per_hour: '时魔', points_7_days: '7日积分', points_30_days: '30日积分',
+            points_multiplier: '积分倍率', updated_at: '更新时间'
+        };
+        const BYTES_KEY = /(_bytes|^raw_uploaded$|^raw_downloaded$|^billed_uploaded$|^billed_downloaded$|^uploaded$|^downloaded$)/;
+        const cache = { me: null, stats: null, points: null, at: 0 };
+        let onRescan = null; // SPA 路由变化后由 boot 调用
+
+        async function api(path, init) {
+            const opts = Object.assign({ credentials: 'include', headers: { accept: 'application/json' } }, init || {});
+            const r = await fetch(API + path, opts);
+            const text = await r.text();
+            let body = null;
+            try { body = text ? JSON.parse(text) : null; } catch (e) { body = { raw: text.slice(0, 160) }; }
+            if (!r.ok) throw new Error((body && (body.error || body.message)) || ('HTTP ' + r.status));
+            return body;
+        }
+
+        async function loadAccount(force) {
+            if (!force && cache.at && Date.now() - cache.at < 30000) return cache;
+            const grab = (p) => api(p).then((v) => ({ ok: true, v: v })).catch((e) => ({ ok: false, e: String(e.message || e) }));
+            const [me, stats, points] = await Promise.all([grab('/me'), grab('/me/stats'), grab('/me/points')]);
+            cache.me = me; cache.stats = stats; cache.points = points; cache.at = Date.now();
+            return cache;
+        }
+
+        function fmtVal(k, v) {
+            if (v === null || v === undefined || v === '') return '—';
+            if (typeof v === 'object') return Array.isArray(v) ? ('[' + v.length + ' 项]') : '{…}';
+            if (BYTES_KEY.test(k) && /^\d+$/.test(String(v))) return fmtBytes(Number(v));
+            return String(v);
+        }
+
+        function kvTable(obj, limit) {
+            const tb = el('table', { class: 'ptx-tb' });
+            tb.appendChild(el('tr', {}, el('th', { text: '字段' }), el('th', { text: '值' })));
+            let n = 0;
+            Object.keys(obj || {}).forEach((k) => {
+                const v = obj[k];
+                if (v !== null && typeof v === 'object') return;
+                if (limit && n++ >= limit) return;
+                tb.appendChild(el('tr', {}, el('td', { text: LABEL[k] || k }), el('td', { text: fmtVal(k, v) })));
+            });
+            return tb;
+        }
+
+        /* ---------- 列表页：从 SPA 渲染结果里抽卡片 ---------- */
+        const TAG_WORDS = ['官方', '分集', '完结', '原盘', '1080P', '1080i', '4K', 'HDR', '杜比', '国语', '粤语', '中字', '英字', '日字'];
+
+        function boxOf(a) {
+            let n = a.parentElement, best = a.parentElement || a;
+            for (let i = 0; i < 7 && n && n !== document.body; i++) {
+                if (/(\d+(?:\.\d+)?)\s*[KMGT]i?B/i.test(txt(n))) { best = n; break; }
+                n = n.parentElement;
+            }
+            return best;
+        }
+
+        function harvest() {
+            const anchors = $$('a[href]').filter((a) => /\/(torrents|media)\/\d+/.test(a.getAttribute('href') || ''));
+            const seen = new Set();
+            const rows = [];
+            anchors.forEach((a) => {
+                const m = (a.getAttribute('href') || '').match(/\/(torrents|media)\/(\d+)/);
+                if (!m) return;
+                const box = boxOf(a);
+                if (!box || seen.has(box)) return;
+                seen.add(box);
+                const t = txt(box);
+                const sizeM = t.match(/(\d+(?:\.\d+)?)\s*([KMGT]i?B)/i);
+                const seedM = t.match(/(?:做种|保种|seeder)[^\d]{0,4}(\d+)/i) || t.match(/(\d+)\s*人做种/);
+                rows.push({
+                    kind: m[1], id: m[2], href: a.getAttribute('href'), box: box,
+                    title: (a.getAttribute('title') || txt(a) || '').trim(),
+                    bytes: sizeM ? sizeToBytes(sizeM[1] + ' ' + sizeM[2]) : 0,
+                    seeders: seedM ? parseInt(seedM[1], 10) : NaN,
+                    tags: TAG_WORDS.filter((w) => t.toUpperCase().indexOf(w.toUpperCase()) >= 0)
+                });
+            });
+            return rows;
+        }
+
+        function applyFilter(rows, v) {
+            let hidden = 0;
+            rows.forEach((r) => {
+                const t = (r.title || txt(r.box)).toLowerCase();
+                let keep = true;
+                if (v.titleNot && t.indexOf(v.titleNot.toLowerCase()) >= 0) keep = false;
+                if (keep && v.titleHas && t.indexOf(v.titleHas.toLowerCase()) < 0) keep = false;
+                if (keep && v.minGB && r.bytes < v.minGB * 1024 ** 3) keep = false;
+                if (keep && v.maxGB && r.bytes > v.maxGB * 1024 ** 3) keep = false;
+                if (keep && v.officialOnly && r.tags.indexOf('官方') < 0) keep = false;
+                if (keep && v.subOnly && r.tags.indexOf('中字') < 0) keep = false;
+                if (keep && v.mandarinOnly && r.tags.indexOf('国语') < 0) keep = false;
+                if (keep && v.minSeed && !(r.seeders >= v.minSeed)) keep = false;
+                r.box.style.display = keep ? '' : 'none';
+                if (!keep) hidden++;
+            });
+            return hidden;
+        }
+
+        function summarize(rows) {
+            let bytes = 0, official = 0, sub = 0, known = 0;
+            const lv = { 5: 0, 10: 0, 20: 0 };
+            rows.forEach((r) => {
+                bytes += r.bytes || 0;
+                if (r.tags.indexOf('官方') >= 0) official++;
+                if (r.tags.indexOf('中字') >= 0) sub++;
+                if (!isNaN(r.seeders)) {
+                    known++;
+                    if (r.seeders <= 5) lv[5]++;
+                    if (r.seeders <= 10) lv[10]++;
+                    if (r.seeders <= 20) lv[20]++;
+                }
+            });
+            return { n: rows.length, bytes: bytes, official: official, sub: sub, known: known, lv: lv };
+        }
+
+        async function directLinks(rows) {
+            const out = [];
+            for (const r of rows) {
+                if (r.kind !== 'torrents') { out.push({ id: r.id, url: location.origin + r.href, note: '媒体页' }); continue; }
+                try {
+                    const v = await api('/torrents/' + r.id + '/download-links', {
+                        method: 'POST',
+                        headers: { accept: 'application/json', 'content-type': 'application/json' },
+                        body: JSON.stringify({})
+                    });
+                    const url = (v && (v.url || v.download_url || (v.link && v.link.url))) || '';
+                    out.push({ id: r.id, url: url || location.origin + r.href, note: url ? '直链' : '接口未返回 url' });
+                } catch (e) {
+                    out.push({ id: r.id, url: location.origin + r.href, note: '直链失败：' + (e.message || e) });
+                }
+                await sleep(250);
+            }
+            return out;
+        }
+
+        function probe(rows) {
+            const report = {
+                sign: SIGN, version: PTX.VERSION, host: HOST, path: location.pathname,
+                anchors: $$('a[href]').filter((a) => /\/(torrents|media)\/\d+/.test(a.getAttribute('href') || '')).length,
+                rows: rows.length,
+                pageKind: /^\/torrents\/\d+/.test(location.pathname) ? 'torrent-detail'
+                    : /^\/media\/\d+/.test(location.pathname) ? 'media-detail'
+                    : /^\/media/.test(location.pathname) ? 'media-list'
+                    : /^\/torrents/.test(location.pathname) ? 'torrent-list' : 'other',
+                samples: rows.slice(0, 5).map((r) => ({ kind: r.kind, id: r.id, title: r.title.slice(0, 60), bytes: r.bytes, seeders: isNaN(r.seeders) ? null : r.seeders, tags: r.tags })),
+                api: { me: !!(cache.me && cache.me.ok), stats: !!(cache.stats && cache.stats.ok), points: !!(cache.points && cache.points.ok) }
+            };
+            return JSON.stringify(report, null, 2);
+        }
+
+        function init() {
+            UI.tab('cola', '可乐', async (pane) => {
+                const wrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
+                const accBox = el('div');
+                const listBox = el('div');
+                const statBox = el('div');
+                const status = el('div', { class: 'ptx-hint' });
+
+                /* --- 账号概览 --- */
+                const renderAcc = async (force) => {
+                    accBox.textContent = '';
+                    accBox.appendChild(el('div', { class: 'ptx-hint', text: '账号（/me · /me/stats · /me/points）' }));
+                    const c = await loadAccount(force);
+                    [['me', '资料'], ['stats', '流量'], ['points', '积分']].forEach(([k, label]) => {
+                        const hit = c[k];
+                        if (hit && hit.ok) {
+                            const d = el('div', { style: { marginTop: '6px' } });
+                            d.appendChild(el('div', { class: 'ptx-hint', text: label }));
+                            d.appendChild(kvTable(hit.v, 14));
+                            accBox.appendChild(d);
+                        } else {
+                            accBox.appendChild(el('div', { class: 'ptx-hint ptx-bad', text: label + '：' + ((hit && hit.e) || '未取到') }));
+                        }
+                    });
+                };
+
+                /* --- 列表增强 --- */
+                let rows = harvest();
+                const refreshRows = () => { rows = harvest(); status.textContent = '识别到 ' + rows.length + ' 个条目'; };
+                onRescan = () => { if (rows) { refreshRows(); doStats(); } };
+
+                const titleNot = el('input', { class: 'ptx-in', style: { width: '86px' }, placeholder: '标题不含' });
+                const titleHas = el('input', { class: 'ptx-in', style: { width: '86px' }, placeholder: '标题含' });
+                const minGB = el('input', { class: 'ptx-in', type: 'number', style: { width: '60px' }, placeholder: '≥GB' });
+                const maxGB = el('input', { class: 'ptx-in', type: 'number', style: { width: '60px' }, placeholder: '≤GB' });
+                const minSeed = el('input', { class: 'ptx-in', type: 'number', style: { width: '56px' }, placeholder: '做种≥' });
+                const officialOnly = el('input', { type: 'checkbox' });
+                const subOnly = el('input', { type: 'checkbox' });
+                const mandarinOnly = el('input', { type: 'checkbox' });
+
+                const read = () => ({
+                    titleNot: titleNot.value.trim(), titleHas: titleHas.value.trim(),
+                    minGB: parseFloat(minGB.value) || 0, maxGB: parseFloat(maxGB.value) || 0,
+                    minSeed: parseInt(minSeed.value, 10) || 0,
+                    officialOnly: officialOnly.checked, subOnly: subOnly.checked, mandarinOnly: mandarinOnly.checked
+                });
+
+                const doStats = () => {
+                    refreshRows();
+                    const s = summarize(rows);
+                    statBox.textContent = '';
+                    const tb = el('table', { class: 'ptx-tb' });
+                    tb.appendChild(el('tr', {}, el('th', { text: '项目' }), el('th', { text: '值' })));
+                    [['条目', s.n], ['合计体积', fmtBytes(s.bytes)], ['官种', s.official], ['带中字', s.sub],
+                        ['≤5 做种', s.lv[5]], ['≤10 做种', s.lv[10]], ['≤20 做种', s.lv[20]]].forEach(([a, b]) => {
+                        tb.appendChild(el('tr', {}, el('td', { text: a }), el('td', { text: String(b) })));
+                    });
+                    statBox.appendChild(tb);
+                    if (!s.known) statBox.appendChild(el('div', { class: 'ptx-hint', text: '未识别到做种数（列表可能不显示），分档为 0。' }));
+                };
+
+                const copyVisible = () => {
+                    const vis = rows.filter((r) => r.box.style.display !== 'none');
+                    if (!vis.length) { UI.log('可乐：没有可见条目', 'warn'); return; }
+                    setClipboard(vis.map((r) => location.origin + r.href).join('\n'));
+                    UI.log('可乐：已复制 ' + vis.length + ' 条详情链接', 'ok');
+                };
+
+                const copyDirect = async (btn) => {
+                    btn.disabled = true;
+                    try {
+                        const vis = rows.filter((r) => r.box.style.display !== 'none');
+                        if (!vis.length) { UI.log('可乐：没有可见条目', 'warn'); return; }
+                        UI.log('可乐：正在向 ' + vis.length + ' 个种子申请直链…');
+                        const links = await directLinks(vis);
+                        setClipboard(links.map((x) => x.url).join('\n'));
+                        const bad = links.filter((x) => x.note !== '直链' && x.note !== '媒体页');
+                        UI.log('可乐：直链已复制（' + (links.length - bad.length) + '/' + links.length + '）' + (bad.length ? '；失败：' + bad[0].note : ''), bad.length ? 'warn' : 'ok');
+                    } finally { btn.disabled = false; }
+                };
+
+                /* --- 详情页附加 --- */
+                const detailBox = el('div');
+                const m = location.pathname.match(/^\/torrents\/(\d+)/);
+                if (m) {
+                    detailBox.appendChild(el('div', { class: 'ptx-hint', text: '种子详情（/torrents/' + m[1] + '）' }));
+                    const tb = el('div');
+                    detailBox.appendChild(tb);
+                    api('/torrents/' + m[1]).then((v) => {
+                        const d = v && (v.torrent || v);
+                        tb.appendChild(kvTable(d, 16));
+                        if (d && d.tags) tb.appendChild(el('div', { class: 'ptx-hint', text: '标签：' + d.tags.join(' / ') }));
+                        if (d && d.official) tb.appendChild(el('div', { class: 'ptx-hint ptx-ok', text: '官方种（official = true）' }));
+                    }).catch((e) => {
+                        tb.appendChild(el('div', { class: 'ptx-hint ptx-bad', text: '详情接口失败：' + (e.message || e) }));
+                    });
+                }
+
+                wrap.appendChild(accBox);
+                wrap.appendChild(el('div', { class: 'ptx-row' },
+                    el('button', { class: 'ptx-btn', text: '刷新账号', onclick: () => renderAcc(true) }),
+                    el('button', { class: 'ptx-btn', text: '重新扫描页面', onclick: () => { refreshRows(); doStats(); } })
+                ));
+                wrap.appendChild(listBox);
+                wrap.appendChild(el('div', { class: 'ptx-row' }, titleNot, titleHas, minGB, maxGB, minSeed));
+                wrap.appendChild(el('div', { class: 'ptx-row' },
+                    officialOnly, el('span', { text: '仅官种' }),
+                    subOnly, el('span', { text: '仅中字' }),
+                    mandarinOnly, el('span', { text: '仅国语' })
+                ));
+                wrap.appendChild(el('div', { class: 'ptx-row' },
+                    el('button', {
+                        class: 'ptx-btn g', text: '过滤',
+                        onclick: () => {
+                            const h = applyFilter(rows, read());
+                            status.textContent = '已隐藏 ' + h + ' / ' + rows.length + ' 条';
+                            doStats();
+                        }
+                    }),
+                    el('button', { class: 'ptx-btn', text: '全部恢复', onclick: () => { rows.forEach((r) => { r.box.style.display = ''; }); status.textContent = '已恢复'; } }),
+                    el('button', { class: 'ptx-btn o', text: '复制详情链接', onclick: copyVisible }),
+                    el('button', { class: 'ptx-btn r', text: '取直链并复制', onclick: (e) => copyDirect(e.target) })
+                ));
+                wrap.appendChild(status);
+                wrap.appendChild(statBox);
+                wrap.appendChild(detailBox);
+                wrap.appendChild(el('div', { class: 'ptx-row' },
+                    el('button', {
+                        class: 'ptx-btn', text: '复制探测报告',
+                        onclick: () => { setClipboard(probe(rows)); UI.log('可乐：探测报告已复制，粘贴回来即可精修选择器', 'ok'); }
+                    })
+                ));
+                wrap.appendChild(el('div', {
+                    class: 'ptx-hint',
+                    text: '数据来自站点自身接口 /api/v1（media / torrents / me / points）。列表统计基于当前页面已渲染的卡片；详情页可看 official 与 tags。'
+                }));
+
+                pane.appendChild(wrap);
+                refreshRows();
+                doStats();
+                renderAcc(false);
+            });
+        }
+
+        return {
+            init: init,
+            rescan: function () { try { if (onRescan) onRescan(); } catch (e) { /* ignore */ } }
+        };
+    })();
+
     /* ======================================================================
      * 6. 模块注册表
      * ==================================================================== */
@@ -2338,6 +2658,7 @@
     module('filter', '种子过滤', () => isTorrents(), () => Filter.init());
     module('seeds', '做种工具', () => isTorrents(), () => SeedTools.init());
     module('fun', '娱乐', () => /slot|lottery/i.test(PAGE), () => Fun.init());
+    module('cola', '可乐', () => IS_REELCORE, () => ReelCore.init());
     module('guard', '署名', () => true, () => initGuardTab());
 
     /* ======================================================================
@@ -2347,8 +2668,12 @@
         console.log(LOGTAG, '启动 v' + PTX.VERSION + ' @ ' + HOST + PAGE);
         try { Guard.run(); } catch (e) { console.error(LOGTAG, '自检异常', e); }
 
+        // ReelCore（colapt）站点结构完全不同，只跑通用模块 + 可乐适配
+        const NEXUS_ONLY = { bonus: 1, claim: 1, official: 1, gift: 1, thanks: 1, mail: 1, filter: 1, seeds: 1, fun: 1 };
+
         MODULES.forEach((m) => {
             try {
+                if (IS_REELCORE && NEXUS_ONLY[m.id]) return;
                 if (!m.when()) return;
                 m.init();
             } catch (e) {
@@ -2358,13 +2683,13 @@
 
         try { UI.mount(); } catch (e) { console.error(LOGTAG, '面板挂载失败', e); }
 
-        // 页面局部刷新（PJAX / Turbo）时重扫
+        // 页面局部刷新（PJAX / Turbo / SPA 路由）时重扫
         let lastUrl = location.href;
         setInterval(() => {
             if (location.href !== lastUrl) {
                 lastUrl = location.href;
-                console.log(LOGTAG, 'URL 变化，重新自检');
                 try { Guard.run(); } catch (e) { /* ignore */ }
+                if (IS_REELCORE) { try { ReelCore.rescan(); } catch (e) { /* ignore */ } }
             }
         }, 1500);
     }
